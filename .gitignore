@@ -1,0 +1,12 @@
+pi
+*.o
+*.o.d
+*.dSYM
+.vscode
+.devcontainer
+core*
+tags
+cscope.*
+*.txt
+*.png
+*.gp
