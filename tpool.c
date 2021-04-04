@@ -1,8 +1,8 @@
+#include "tpool.h"
 #include <errno.h>
 #include <pthread.h>
 #include <stdlib.h>
 #include <time.h>
-#include "tpool.h"
 
 enum __future_flags {
     __FUTURE_RUNNING = 01,
@@ -12,30 +12,35 @@ enum __future_flags {
     __FUTURE_DESTROYED = 020,
 };
 
+/* Linked-list to store the jobs in queue */
 typedef struct __threadtask {
-    void *(*func)(void *);
-    void *arg;
-    struct __tpool_future *future;
-    struct __threadtask *next;
+    void *(*func)(void *); /* the function that task should execute */
+    void *arg;             /* argument passed to func */
+    struct __tpool_future
+        *future;               /* A structure to store task status and result */
+    struct __threadtask *next; /* pointer to next task */
 } threadtask_t;
 
 typedef struct __jobqueue {
-    threadtask_t *head, *tail;
-    pthread_cond_t cond_nonempty;
-    pthread_mutex_t rwlock;
+    threadtask_t *head, *tail; /* store head and tail of queue */
+    pthread_cond_t
+        cond_nonempty; /* condition variable to check if queue is non-empty */
+    pthread_mutex_t rwlock; /* lock share resources like head and tail */
 } jobqueue_t;
 
+/* A structure to store job status and return result */
 struct __tpool_future {
-    int flag;
-    void *result;
-    pthread_mutex_t mutex;
-    pthread_cond_t cond_finished;
+    int flag;              /* job status */
+    void *result;          /* the result of job which points to this future */
+    pthread_mutex_t mutex; /* lock share resouces like flag and result */
+    pthread_cond_t
+        cond_finished; /* condition variable to check if job is finished */
 };
 
 struct __threadpool {
-    size_t count;
-    pthread_t *workers;
-    jobqueue_t *jobqueue;
+    size_t count;         /* count of pthread */
+    pthread_t *workers;   /* store pthread id */
+    jobqueue_t *jobqueue; /* queue which stores pending jobs */
 };
 
 static struct __tpool_future *tpool_future_create(void)

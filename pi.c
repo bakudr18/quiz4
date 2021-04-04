@@ -1,6 +1,6 @@
 #include <math.h>
-#include <stdlib.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include "tpool.h"
 
 #define PRECISION 10000 /* upper bound in BPP sum */
