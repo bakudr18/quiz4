@@ -3,6 +3,7 @@
 #include <pthread.h>
 #include <stdlib.h>
 #include <time.h>
+#include "list.h"
 
 enum __future_flags {
     __FUTURE_RUNNING = 01,
@@ -17,12 +18,12 @@ typedef struct __threadtask {
     void *(*func)(void *); /* the function that task should execute */
     void *arg;             /* argument passed to func */
     struct __tpool_future
-        *future;               /* A structure to store task status and result */
-    struct __threadtask *next; /* pointer to next task */
+        *future;           /* A structure to store task status and result */
+    struct list_head list; /* linked-list of task structure */
 } threadtask_t;
 
 typedef struct __jobqueue {
-    threadtask_t *head, *tail; /* store head and tail of queue */
+    struct list_head head; /* list head of task */
     pthread_cond_t
         cond_nonempty; /* condition variable to check if queue is non-empty */
     pthread_mutex_t rwlock; /* lock share resources like head and tail */
@@ -105,7 +106,7 @@ static jobqueue_t *jobqueue_create(void)
 {
     jobqueue_t *jobqueue = malloc(sizeof(jobqueue_t));
     if (jobqueue) {
-        jobqueue->head = jobqueue->tail = NULL;
+        INIT_LIST_HEAD(&jobqueue->head);
         pthread_cond_init(&jobqueue->cond_nonempty, NULL);
         pthread_mutex_init(&jobqueue->rwlock, NULL);
     }
@@ -114,21 +115,22 @@ static jobqueue_t *jobqueue_create(void)
 
 static void jobqueue_destroy(jobqueue_t *jobqueue)
 {
-    threadtask_t *tmp = jobqueue->head;
-    while (tmp) {
-        jobqueue->head = jobqueue->head->next;
-        pthread_mutex_lock(&tmp->future->mutex);
-        if (tmp->future->flag & __FUTURE_DESTROYED) {
-            pthread_mutex_unlock(&tmp->future->mutex);
-            pthread_mutex_destroy(&tmp->future->mutex);
-            pthread_cond_destroy(&tmp->future->cond_finished);
-            free(tmp->future);
+    struct list_head *node, *tmp, *head;
+    head = &jobqueue->head;
+    list_for_each_safe(node, tmp, head)
+    {
+        threadtask_t *task = list_entry(node, threadtask_t, list);
+        pthread_mutex_lock(&task->future->mutex);
+        if (task->future->flag & __FUTURE_DESTROYED) {
+            pthread_mutex_unlock(&task->future->mutex);
+            pthread_mutex_destroy(&task->future->mutex);
+            pthread_cond_destroy(&task->future->cond_finished);
+            free(task->future);
         } else {
-            tmp->future->flag |= __FUTURE_CANCELLED;
-            pthread_mutex_unlock(&tmp->future->mutex);
+            task->future->flag |= __FUTURE_CANCELLED;
+            pthread_mutex_unlock(&task->future->mutex);
         }
-        free(tmp);
-        tmp = jobqueue->head;
+        free(task);
     }
 
     pthread_mutex_destroy(&jobqueue->rwlock);
@@ -145,6 +147,7 @@ static void __jobqueue_fetch_cleanup(void *arg)
 static void *jobqueue_fetch(void *queue)
 {
     jobqueue_t *jobqueue = (jobqueue_t *) queue;
+    struct list_head *head = &jobqueue->head;
     threadtask_t *task;
     int old_state;
 
@@ -155,21 +158,11 @@ static void *jobqueue_fetch(void *queue)
         pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, &old_state);
         pthread_testcancel();
 
-        while (!jobqueue->tail)
+        while (list_empty(head))
             pthread_cond_wait(&jobqueue->cond_nonempty, &jobqueue->rwlock);
         pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &old_state);
-        if (jobqueue->head == jobqueue->tail) {
-            task = jobqueue->tail;
-            jobqueue->head = jobqueue->tail = NULL;
-        } else {
-            threadtask_t *tmp;
-            for (tmp = jobqueue->head; tmp->next != jobqueue->tail;
-                 tmp = tmp->next)
-                ;
-            task = tmp->next;
-            tmp->next = NULL;
-            jobqueue->tail = tmp;
-        }
+        task = list_entry(head->prev, threadtask_t, list);
+        list_del(head->prev);
         pthread_mutex_unlock(&jobqueue->rwlock);
 
         if (task->func) {
@@ -254,11 +247,8 @@ struct __tpool_future *tpool_apply(struct __threadpool *pool,
     if (new_head && future) {
         new_head->func = func, new_head->arg = arg, new_head->future = future;
         pthread_mutex_lock(&jobqueue->rwlock);
-        if (jobqueue->head) {
-            new_head->next = jobqueue->head;
-            jobqueue->head = new_head;
-        } else {
-            jobqueue->head = jobqueue->tail = new_head;
+        list_add(&new_head->list, &jobqueue->head);
+        if (list_is_singular(&jobqueue->head)) {
             pthread_cond_broadcast(&jobqueue->cond_nonempty);
         }
         pthread_mutex_unlock(&jobqueue->rwlock);
