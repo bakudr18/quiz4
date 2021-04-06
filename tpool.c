@@ -166,16 +166,6 @@ static void *jobqueue_fetch(void *queue)
         pthread_mutex_unlock(&jobqueue->rwlock);
 
         if (task->func) {
-            pthread_mutex_lock(&task->future->mutex);
-            if (task->future->flag & __FUTURE_CANCELLED) {
-                pthread_mutex_unlock(&task->future->mutex);
-                free(task);
-                continue;
-            } else {
-                task->future->flag |= __FUTURE_RUNNING;
-                pthread_mutex_unlock(&task->future->mutex);
-            }
-
             void *ret_value = task->func(task->arg);
             pthread_mutex_lock(&task->future->mutex);
             if (task->future->flag & __FUTURE_DESTROYED) {
